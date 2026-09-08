@@ -21,6 +21,13 @@ import 'youtube_player_event_handler.dart';
 /// The Web Resource Error.
 typedef YoutubeWebResourceError = WebResourceError;
 
+/// Signature for [YoutubePlayerController.onNavigationRequest].
+///
+/// [uri] is the navigation target and [videoId] its `v` query parameter, when
+/// present. Return `true` to prevent the player's own handling of [uri].
+typedef YoutubeNavigationRequestCallback =
+    FutureOr<bool> Function(Uri uri, String? videoId);
+
 Future<String> _buildPlayerHTML(Map<String, String> data) async {
   final playerHtml = await rootBundle.loadString(
     'packages/youtube_player_iframe/assets/player.html',
@@ -41,6 +48,7 @@ class YoutubePlayerController implements YoutubePlayerIFrameAPI {
   YoutubePlayerController({
     this.params = const YoutubePlayerParams(),
     ValueChanged<YoutubeWebResourceError>? onWebResourceError,
+    this.onNavigationRequest,
     this.key,
     this.credentialless = false,
   }) {
@@ -86,11 +94,13 @@ class YoutubePlayerController implements YoutubePlayerIFrameAPI {
     double? startSeconds,
     double? endSeconds,
     bool credentialless = false,
+    YoutubeNavigationRequestCallback? onNavigationRequest,
   }) {
     final controller = YoutubePlayerController(
       params: params,
       key: videoId,
       credentialless: credentialless,
+      onNavigationRequest: onNavigationRequest,
     );
 
     if (autoPlay) {
@@ -125,6 +135,16 @@ class YoutubePlayerController implements YoutubePlayerIFrameAPI {
 
   /// The [WebViewController] that drives the player
   late final WebViewController webViewController;
+
+  /// Called before the player handles a navigation request itself, such as a
+  /// tap on the video title, channel logo or a related video.
+  ///
+  /// Return `true` to prevent the player's own handling of [uri] (loading the
+  /// related video, or opening the link in the browser). Return `false` to let
+  /// the default handling proceed.
+  ///
+  /// [videoId] is the `v` query parameter of [uri], when present.
+  YoutubeNavigationRequestCallback? onNavigationRequest;
 
   late final YoutubePlayerEventHandler _eventHandler;
   late final JsBridge _bridge;
@@ -621,7 +641,7 @@ class YoutubePlayerController implements YoutubePlayerIFrameAPI {
     return videoStateStream.map((state) => state.position);
   }
 
-  NavigationDecision _decideNavigation(Uri? uri) {
+  Future<NavigationDecision> _decideNavigation(Uri? uri) async {
     if (uri == null) return NavigationDecision.prevent;
 
     final queryParams = uri.queryParameters;
@@ -641,6 +661,10 @@ class YoutubePlayerController implements YoutubePlayerIFrameAPI {
         defaultTargetPlatform == TargetPlatform.macOS) {
       return NavigationDecision.navigate;
     }
+
+    final prevent =
+        await onNavigationRequest?.call(uri, queryParams['v']) ?? false;
+    if (prevent) return NavigationDecision.prevent;
 
     switch (featureName) {
       case 'emb_rel_pause' || 'emb_rel_end' || 'emb_info':
