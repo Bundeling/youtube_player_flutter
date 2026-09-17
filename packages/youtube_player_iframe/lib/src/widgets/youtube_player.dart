@@ -291,6 +291,16 @@ class _YoutubePlayerState extends State<YoutubePlayer>
     if (newRect != _playerRect) setState(() => _playerRect = newRect);
   }
 
+  // The overlay-hosted WebView has no Scrollable ancestor, so a vertical drag
+  // on the player would otherwise be swallowed by the WebView instead of
+  // scrolling the page the inline placeholder sits in. Resolved per gesture
+  // from the placeholder, which is still in the caller's tree.
+  ScrollPosition? _inlineScrollPosition() {
+    final context = _placeholderKey.currentContext;
+    if (context == null) return null;
+    return context.findAncestorStateOfType<ScrollableState>()?.position;
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
@@ -344,6 +354,7 @@ class _YoutubePlayerState extends State<YoutubePlayer>
               gestureRecognizers: widget.gestureRecognizers,
               enableFullScreenOnVerticalDrag:
                   widget.enableFullScreenOnVerticalDrag,
+              scrollPositionResolver: _inlineScrollPosition,
               controlsBuilder: widget.controlsBuilder,
               fullscreenCount: _fullscreenCount,
               thumbnailQuality: widget.thumbnailQuality,
@@ -400,6 +411,7 @@ class _PlayerOverlayContent extends StatelessWidget {
     required this.backgroundColor,
     required this.gestureRecognizers,
     required this.enableFullScreenOnVerticalDrag,
+    required this.scrollPositionResolver,
     required this.fullscreenCount,
     this.aspectRatio = 16 / 9,
     this.controlsBuilder,
@@ -413,6 +425,7 @@ class _PlayerOverlayContent extends StatelessWidget {
   final Color? backgroundColor;
   final Set<Factory<OneSequenceGestureRecognizer>> gestureRecognizers;
   final bool enableFullScreenOnVerticalDrag;
+  final ScrollPosition? Function() scrollPositionResolver;
   final double aspectRatio;
   final Widget Function(BuildContext context, bool isFullscreen)?
   controlsBuilder;
@@ -542,6 +555,9 @@ class _PlayerOverlayContent extends StatelessWidget {
                       gestureRecognizers: gestureRecognizers,
                       enableFullScreenOnVerticalDrag:
                           enableFullScreenOnVerticalDrag,
+                      scrollPositionResolver: isFullscreen
+                          ? null
+                          : scrollPositionResolver,
                     ),
                   ),
                 ),
@@ -654,37 +670,79 @@ class _PlayerLoadingOverlay extends StatelessWidget {
   }
 }
 
-class _YoutubeWebView extends StatelessWidget {
+class _YoutubeWebView extends StatefulWidget {
   const _YoutubeWebView({
     required this.controller,
     required this.gestureRecognizers,
     required this.enableFullScreenOnVerticalDrag,
+    required this.scrollPositionResolver,
   });
 
   final YoutubePlayerController controller;
   final Set<Factory<OneSequenceGestureRecognizer>> gestureRecognizers;
   final bool enableFullScreenOnVerticalDrag;
 
-  void _onVerticalDragEnd(DragEndDetails details) {
+  /// Resolves the scroll position vertical drags are handed to, or `null` to
+  /// leave them to the WebView.
+  ///
+  /// Ignored when [enableFullScreenOnVerticalDrag] is set, which claims the
+  /// vertical drag for the fullscreen gesture.
+  final ScrollPosition? Function()? scrollPositionResolver;
+
+  @override
+  State<_YoutubeWebView> createState() => _YoutubeWebViewState();
+}
+
+class _YoutubeWebViewState extends State<_YoutubeWebView> {
+  Drag? _drag;
+
+  @override
+  void dispose() {
+    _drag?.cancel();
+    super.dispose();
+  }
+
+  void _onFullScreenDragEnd(DragEndDetails details) {
     final velocity = details.primaryVelocity ?? 0;
     if (velocity.abs() > 300) {
       velocity.isNegative
-          ? controller.enterFullScreen()
-          : controller.exitFullScreen();
+          ? widget.controller.enterFullScreen()
+          : widget.controller.exitFullScreen();
     }
   }
+
+  void _onScrollDragStart(DragStartDetails details) {
+    final position = widget.scrollPositionResolver?.call();
+    _drag = position?.drag(details, () => _drag = null);
+  }
+
+  void _onScrollDragUpdate(DragUpdateDetails details) => _drag?.update(details);
+
+  void _onScrollDragEnd(DragEndDetails details) => _drag?.end(details);
+
+  void _onScrollDragCancel() => _drag?.cancel();
 
   @override
   Widget build(BuildContext context) {
     final webView = WebViewWidget(
-      controller: controller.webViewController,
-      gestureRecognizers: gestureRecognizers,
+      controller: widget.controller.webViewController,
+      gestureRecognizers: widget.gestureRecognizers,
     );
 
-    if (!enableFullScreenOnVerticalDrag) return webView;
+    if (widget.enableFullScreenOnVerticalDrag) {
+      return GestureDetector(
+        onVerticalDragEnd: _onFullScreenDragEnd,
+        child: webView,
+      );
+    }
+
+    if (widget.scrollPositionResolver == null) return webView;
 
     return GestureDetector(
-      onVerticalDragEnd: _onVerticalDragEnd,
+      onVerticalDragStart: _onScrollDragStart,
+      onVerticalDragUpdate: _onScrollDragUpdate,
+      onVerticalDragEnd: _onScrollDragEnd,
+      onVerticalDragCancel: _onScrollDragCancel,
       child: webView,
     );
   }

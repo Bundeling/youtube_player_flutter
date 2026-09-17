@@ -10,6 +10,10 @@
         width: 100%;
         height: 100%;
         pointer-events: <<pointerEvents>>;
+        /* The player fills the viewport, so any scroll here is a stray drag
+           dragging the video out of frame. */
+        overflow: hidden;
+        overscroll-behavior: none;
       }
 
       body {
@@ -17,6 +21,8 @@
         width: 100%;
         height: 100%;
         pointer-events: inherit;
+        overflow: hidden;
+        overscroll-behavior: none;
       }
 
       .embed-container iframe,
